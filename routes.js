@@ -1,54 +1,46 @@
 'use strict'
 
-//IMPORTS
 const express = require('express');
 const {check, validationResult} = require('express-validator');
+const middleware = require('./middleware') // database Middleware
 const bcryptjs = require('bcryptjs');
 const { models } = require('./db');
-
-//IMPORT MIDDLEWARE
-const isEmpty = require('./middleware/isEmpty');
-const isUniqueEmail = require('./middleware/uniqueEmail');
-const authenticate = require('./middleware/authenticate');
 
 //SET UP ROUTER
 const router = express.Router();
 
-//MODEL REFERENCES
+//MODELS
 const { User, Course } = models;
 
-/***************************
- * ASYNC HANDLER FUNCTION
- ***************************/
-function asyncHandler(cb){
-    return async (req, res, next)=>{
-      try {
-        await cb(req,res, next);
-      } catch(err){
-        next(err);
-      };
-    };
-};
+/*************************
+ * ASYNC FUNCTION HANDLER
+ *************************/
+function asyncHandler(cb) {
+    return async (req, res, next) => {
+        try {
+            await cb(req, res, next)
+        } catch (error) {
+            next(error)
+        }
+    }
+}
 
-/****************
- * USER ROUTES
- ****************/
-
-//GET /api/users
-router.get('/api/users', authenticate.authenticateUser, asyncHandler(async(req, res) => {
-    const user = req.user;
+/*************************
+ * USERS ROUTES
+ *************************/
+//GET /USERS
+router.get('/users', middleware.authenticateUser, asyncHandler(async(req, res) => {
+    const user = req.currentUser
 
     res.json({
-      userId: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      emailAddress: user.emailAddress,
-      password: user.password
+        Id: user.id,
+        Name: `${user.firstName} ${user.lastName}`,
+        Email: user.emailAddress,
     });
 }));
 
-//POST /api/users
-router.post('/api/users', [
+//POST /USERS
+router.post('/users', [
     check('firstName')
         .exists()
         .withMessage("Please provide value for 'firstName'"),
@@ -61,48 +53,49 @@ router.post('/api/users', [
     check('password')
         .exists()
         .withMessage("Please provide value for 'password'")
-    ],asyncHandler(async(req, res) => { 
-        try {
-            const errors = validationResult(req);
-            const user = req.body;
+],asyncHandler(async(req, res) => { 
+    try {
+        const errors = validationResult(req);
 
-            if (!errors.isEmpty()) {
-                const errorMessages = errors.array().map(error => error.msg);
-        
-                return res.status(400).json({ errors: errorMessages });
-            };
+        if (!errors.isEmpty()) {
+            const errorMessages = errors.array().map(error => error.msg);
+    
+            return res.status(400).json({ errors: errorMessages });
+        }
 
-            //CHECK IF USER EMAIL ALREADY EXISTS
-            const uniqueEmail = await isUniqueEmail.isUniqueEmail(user);
+        //RETRIEVE USER FROM REQUEST BODY
+        const user = req.body;
 
-            if(!uniqueEmail) {
-                return res.status(400).json({ error: "Email already in use. please provide a unique email." });
-            };
+        //VALIDATE EMAIL IS UNIQUE
+        const uniqueEmail = await middleware.isUniqueEmail(user)
+        if(!uniqueEmail) {
+            return res.status(400).json({ error: "Email already in use. please provide a unique email." });
+        }
 
-            const newUser = await User.create(user);
+        //HASH PASSWORD
+        user.password = bcryptjs.hashSync(user.password);
 
-            //HASHES PASSWORD
-            user.password = bcryptjs.hashSync(user.password);
-            
-            //201 STATUS AND END
-            res.status(201).location(`/`).end();
+        //ADD USER TO DATABASE
+        const newUser = await User.create(user);
 
-        } catch (error) {
-            if (error.name === 'SequelizeValidationError') {
-                res.status(400).location('/').json({error: error.errors[0].message})
-            } else {
-                throw error
-            };
-        };
+        //STATSUS 201 OR 400
+        res.status(201).location(`/`).end();
+    } catch (error) {
+        if (error.name === 'SequelizeValidationError') {
+            res.status(400).location('/').json({error: error.errors[0].message})
+        } else {
+            throw error
+        }
+    }
         
 }));
 
-/*****************
- * COURSE ROUTES
- *****************/
+/*************************
+ * COURSES ROUTES
+ *************************/
 
- //GET /api/courses
- router.get("/api/courses", asyncHandler(async (req, res) => {
+//GET /COURSES
+router.get("/courses", asyncHandler(async (req, res) => {
     const courses = await Course.findAll({
         include: {
             model: User,
@@ -111,13 +104,11 @@ router.post('/api/users', [
         },
         attributes: ["id", "title", "description", "estimatedTime", "materialsNeeded"]
     });
-
     res.json(courses);
+}))
 
-}));
-
- //GET /api/courses/:id
- router.get("/api/courses/:id", asyncHandler(async(req, res) => {
+//GET /COURSES/:ID
+router.get("/courses/:id", asyncHandler(async(req, res) => {
     const courseId = req.params.id;
     const course = await Course.findByPk(courseId, {
         include: {
@@ -126,31 +117,31 @@ router.post('/api/users', [
             attributes: ["id", "firstName", "lastName", "emailAddress"]
         },
         attributes: ["id", "title", "description", "estimatedTime", "materialsNeeded"]
-    });
+    })
 
     if (course) {
         res.json(course)
     } else {
         res.status(404).json({message: "couldn't find course by id provided"})
-    };
-}));
+    }
+}))
 
- //POST /api/courses
- router.post("/api/courses", [
+//POST /COURSES
+router.post("/courses", [
     check("title")
         .exists()
-        .withMessage("Please provide value for 'title'"),
+        .withMessage("Please provide value from 'title'"),
     check("description")
         .exists()
         .withMessage("Please provide value for 'description'"),
     check("userId")
         .exists()
         .withMessage("Please provide value for 'userId'")
-], authenticate.authenticateUser, asyncHandler(async(req, res) => {
+], middleware.authenticateUser, asyncHandler(async(req, res) => {
     const errors = validationResult(req);
 
     if (!errors.isEmpty()) {
-        const errorMessages = errors.array().map(err => err.message);
+        const errorMessages = errors.array().map(error => error.msg);
 
         return res.status(400).json({ errors: errorMessages });
     };
@@ -159,61 +150,63 @@ router.post('/api/users', [
 
     //ADD COURSE TO DATABASE
     const newCourse = await Course.create(course);
-    const courseId = newCourse.dataValues.id;
+    const courseId = newCourse.dataValues.id
 
-    //201 STATUS AND END
+    //STATUS 201 
     res.status(201).location(`/courses/${courseId}`).end();
 
 }));
 
- //PUT /api/courses/:id
- router.put("/API/courses/:id", authenticate.authenticateUser, asyncHandler(async(req, res) => {
+router.put('/courses/:id', [
+    check("title")
+      .exists({ checkNull: true, checkFalsy: true })
+      .withMessage('Please provide "title"'),
+    check("description")
+      .exists({ checkNull: true, checkFalsy: true })
+      .withMessage('Please provide "description"'),
+    ], middleware.authenticateUser, asyncHandler( async(req, res) => {
+      const errors = validationResult(req);
 
-    //VALIDATE JSON NOT EMPTY
-    if(isEmpty.isEmpty(req.body)) {
-        return res.status(400).json({message: "JSON data cannot be empty"});
-    };
-
-    const userId = req.currentUser.dataValues.id;
-    const courseId = req.params.id;
-    const course = await Course.findByPk(courseId);
-    
-    //IF COURSE IS FOUND
-    if (course) {
-        const courseUserId = course.dataValues.userId;
-
-        //ONLY USER WITH COURSE CAN EDIT COURSE
-        if(userId === courseUserId) {
-            await course.update(req.body);
-            res.status(204).end();
-        } else {
-            res.status(403).json({message: "You do not have the authorization to make changes to this course."});
-        }
+      //VALIDATION
+      if (!errors.isEmpty()) {
+          const errorMessages = errors.array().map(error => error.msg);
         
-    } else {
-        res.status(401).json({message: "No Course Found"});
-    };
-}));
+          return res.status(400).json({ errors: errorMessages });
+      };
 
- //DELETE /api/courses/:id 
- router.delete("/courses/:id", authenticate.authenticateUser, asyncHandler(async(req, res) => {
-    const userId = req.currentUser.dataValues.id;
-    const courseId = req.params.id;
-    const course = await Course.findByPk(courseId);
+      const course = await Course.findByPk(req.params.id);
+      const user = req.currentUser;
     
-    //IF COURSE IS FOUND
-    if (course) {
-        const courseUserId = course.dataValues.userId
-        //ONLY USER WITH COURSE CAN DELETE
-        if (userId === courseUserId) {
-            await course.destroy();
-            res.status(204).end();
-        } else {
-            res.status(403).json({message: "You do not have the authorization to remove this course."})
-        };
-    } else {
-        res.status(401).json({message: "No Course Found"})
+      if (course.userId === user.id) {
+        await models.Course.update({
+          title: req.body.title,
+          description: req.body.description,
+          estimatedTime: req.body.estimatedTime,
+          materialsNeeded: req.body.materialsNeeded,
+        },
+        { where: { id: req.params.id } }
+        );
+
+        res.status(201).end();  
+      } else {
+      res.status(403).json("User does not have authorization to update the requested course");
+      };
     }
-}));
+  ));
+
+//DELETE /COURSES/:ID
+router.delete('/courses/:id', middleware.authenticateUser, asyncHandler( async(req, res) => {
+    const course = await models.Course.findOne({where: { id: req.params.id }});
+    const user = req.currentUser;
+
+    if (course.userId === user.id) {
+      await models.Course.destroy(
+        { where: { id: req.params.id } }
+      );
+      res.status(201).end();  
+    } else {
+      res.status(403).json("User doesn't have authorization to delete the requested course");
+    };
+  }));
 
 module.exports = router;
